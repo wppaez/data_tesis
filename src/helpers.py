@@ -24,13 +24,16 @@ async def close_not_now(
 
         if ahora_no_is_visible:
             await page.get_by_role("button", name="Ahora No").click()
+            return
 
         not_now_is_visible = await page.get_by_role(
             "button", name="Not Now"
         ).is_visible()
+        
 
         if not_now_is_visible:
             await page.get_by_role("button", name="Not Now").click()
+            return
 
     except asyncio.exceptions.TimeoutError:
         print(MESSAGES[kind])

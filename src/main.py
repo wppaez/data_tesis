@@ -9,13 +9,12 @@ load_dotenv()
 # Variables de entorno
 INSTAGRAM_USER = "data.user_wppb"
 INSTAGRAM_PASSWORD = "Cliford99"
-NAVIGATION_DELAY = 3000
-
+NAVIGATION_DELAY = 10000
 
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context()
+        context = await browser.new_context(locale='en-US')
         page = await context.new_page()
 
         try:
@@ -26,13 +25,13 @@ async def main():
             await page.click("button[type='submit']")
             await page.wait_for_timeout(NAVIGATION_DELAY)
 
-            # Close dialogs
+            # Cerrar diálogos
             await close_not_now(page)
             await page.wait_for_timeout(NAVIGATION_DELAY)
 
             await close_not_now(page, "NOTIFICATIONS")
 
-            # Search a profile
+            # Buscar un perfil
             await page.get_by_role("link", name="Search Search").click()
             await page.wait_for_timeout(NAVIGATION_DELAY)
 
@@ -41,25 +40,50 @@ async def main():
             await page.get_by_placeholder("Search").fill(profile_id)
             await page.keyboard.press("Enter")
 
-            # Go to profile
-            await page.get_by_role(
-                "link", name=f"{profile_id}'s profile picture", exact=True
-            ).click()
+            # Ir al perfil
+            await page.click(f"a[href='/{profile_id}/']")
             await page.wait_for_timeout(NAVIGATION_DELAY)
 
-            # Si necesitas averiguar como encontrar un elemento puedes usar esto:
-            await page.pause()
-            # Para salir del page.pause, en la terminal presionas CTRL + C, dos veces
+            # Ir a la sección de publicaciones (posts)
+            await page.get_by_role("tab", name="Posts").click()
+            await page.wait_for_timeout(NAVIGATION_DELAY)
+
+            # Obtener el número total de posts
+            total_posts = await page.evaluate(
+                """() => {
+                    const totalPostsElement = document.querySelector("span._ac2a span.html-span");
+                    return totalPostsElement ? parseInt(totalPostsElement.innerText) : 0;
+                }"""
+            )
+            print(f"Total number of posts: {total_posts}")
+
+            # Hacer clic en cada post visible y extraer comentarios
+            posts = await page.locator('[role="main"] [role="tablist"] ~ div a').count()
+            links_to_visit = []
+            while posts < total_posts:
+                links = await page.locator('[role="main"] [role="tablist"] ~ div a').all()
+                hrefs = [await link.get_attribute('href') for link in links[-12:]]
+                links_to_visit.extend(hrefs)
+                await page.keyboard.press("End")
+                await page.wait_for_timeout(3000)
+                posts += 12
+                print(posts,total_posts, len(links_to_visit))
+            
+            links = await page.locator('[role="main"] [role="tablist"] ~ div a').all()
+            remaining = posts - total_posts 
+            hrefs = [await link.get_attribute('href') for link in links[-remaining:]]
+            links_to_visit.extend(hrefs)
+            print(links_to_visit)
+                
+            
+            # Cerrar sesión
+            await page.goto("https://www.instagram.com/accounts/logout/")
+            await page.wait_for_timeout(NAVIGATION_DELAY)
 
         except Exception as e:
-            print(f"Error: {e}")
             traceback.print_exc()
         finally:
-            # Cerrar sesión y el navegador
-            await page.close()
-            await context.close()
             await browser.close()
 
-
-if __name__ == "__main__":
-    asyncio.run(main())
+# Ejecuta la función principal
+asyncio.run(main())
