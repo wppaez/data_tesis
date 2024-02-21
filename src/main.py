@@ -2,7 +2,7 @@ import asyncio
 import traceback
 from playwright.async_api import async_playwright
 from dotenv import load_dotenv
-from helpers import login, go_to_profile, get_profile_posts
+from helpers import login, go_to_profile, get_profile_posts, get_post_comments
 
 load_dotenv()
 
@@ -10,6 +10,7 @@ load_dotenv()
 INSTAGRAM_USER = "data.user_wppb"
 INSTAGRAM_PASSWORD = "Cliford99"
 NAVIGATION_DELAY = 10000
+FIRST_link = "https://www.instagram.com/rappicolombia/p/C3gJ28MOAEr/"
 
 
 async def main():
@@ -23,26 +24,22 @@ async def main():
             await login(page, INSTAGRAM_USER, INSTAGRAM_PASSWORD)
 
             # Ir a un perfil
-            await go_to_profile(page, "rappicolombia")
+            # await go_to_profile(page, "rappicolombia")
 
             # Obtener links de los posts
-            links_to_visit = await get_profile_posts(page)
+            # links_to_visit = await get_profile_posts(page)
 
-            link_to_visit = links_to_visit[0]
-            is_reel = "/reel/" in link_to_visit
-            post_tab = await context.new_page()
-            await post_tab.goto(link_to_visit)
-            await post_tab.wait_for_timeout(NAVIGATION_DELAY)
-            await post_tab.wait_for_timeout(NAVIGATION_DELAY)
-            comments_wrapper = await page.locator(
-                '[role="main"] [role="presentation"] [role="presentation"] ul > [role="button"]'
-            ).all()
-            print(len(comments_wrapper))
-            # caption = comments_wrapper[0] # for some reason doesn't work
-            await post_tab.pause()
+            # Obtener los datos de cada post:
+            # for link_to_visit in links_to_visit:
+            #     (caption, comments) = await get_post_comments(context, link_to_visit)
 
-            print(links_to_visit)
-            print(len(links_to_visit))
+            link_to_visit = FIRST_link
+            (caption, comments) = await get_post_comments(context, link_to_visit)
+
+            print(caption)
+            print(comments)
+
+            await page.pause()
 
             # Cerrar sesión
             await page.goto("https://www.instagram.com/accounts/logout/")

@@ -1,6 +1,6 @@
 import asyncio
 from typing import Literal
-from playwright.async_api import Page
+from playwright.async_api import Page, BrowserContext
 
 NAVIGATION_DELAY = 10000
 
@@ -108,3 +108,93 @@ async def get_profile_posts(page: Page) -> list[str]:
     links_to_visit = [f"{profile_url}/{href}".replace("///", "/") for href in hrefs]
 
     return links_to_visit
+
+
+async def get_post_comments(
+    context: BrowserContext, post_link: str
+) -> tuple[str, list[str]]:
+    # Ir al post
+    post_tab = await context.new_page()
+    await post_tab.goto(post_link)
+    await post_tab.wait_for_timeout(NAVIGATION_DELAY)
+
+    # Configurar queries
+    wrapper_query = '[role="main"] [role="presentation"] [role="presentation"]'
+    wrapper_items_query = f'{wrapper_query} ul > [role="button"]'
+    caption_query = f"{wrapper_items_query} h1"
+    comments_query = f'{wrapper_items_query} h3 ~ div > span[dir="auto"]'
+
+    # Obtener caption
+    caption = await post_tab.locator(caption_query).first.text_content()
+
+    if caption is None:
+        raise LookupError("Couldn't find caption")
+
+    # Cargar todos los comentarios
+    load_more_comments_is_visible = await post_tab.get_by_role(
+        "button", name="Load more comments"
+    ).is_visible()
+
+    while load_more_comments_is_visible:
+        await post_tab.get_by_role(
+            "button", name="Load more comments"
+        ).scroll_into_view_if_needed()
+        await post_tab.get_by_role("button", name="Load more comments").click()
+        await post_tab.wait_for_timeout(3000)
+
+        load_more_comments_is_visible = await post_tab.get_by_role(
+            "button", name="Load more comments"
+        ).is_visible()
+
+    # Cargar comentarios ocultos
+    hidden_comments_is_visible = await post_tab.get_by_role(
+        "button", name="View hidden comments"
+    ).is_visible()
+
+    while hidden_comments_is_visible:
+        await post_tab.get_by_role(
+            "button", name="View hidden comments"
+        ).scroll_into_view_if_needed()
+        await post_tab.get_by_role("button", name="View hidden comments").click()
+        await post_tab.wait_for_timeout(3000)
+
+        hidden_comments_is_visible = await post_tab.get_by_role(
+            "button", name="View hidden comments"
+        ).is_visible()
+
+    view_replies_count = await post_tab.get_by_role(
+        "button", name="View replies"
+    ).count()
+
+    # Cargar respuestas a comentarios
+    while view_replies_count > 0:
+        view_replies_buttons = await post_tab.get_by_role(
+            "button", name="View replies"
+        ).all()
+
+        # Cargar respuesta por cada lista de respuestas a cargar
+        for view_reply_button in view_replies_buttons:
+            view_reply_is_visible = await view_reply_button.is_visible()
+            if not view_reply_is_visible:
+                continue
+
+            await view_reply_button.scroll_into_view_if_needed()
+            await view_reply_button.click()
+            await post_tab.wait_for_timeout(3000)
+
+        # Revisar si aun tenemos respuestas por cargar
+        view_replies_count = await post_tab.get_by_role(
+            "button", name="View replies"
+        ).count()
+
+    # Extraer comentarios
+    comments_wrapper = await post_tab.locator(comments_query).all()
+    comments = []
+    for comment_wrapper in comments_wrapper:
+        comment = await comment_wrapper.text_content()
+        if comment is None:
+            continue
+
+        comments.append(comment)
+
+    return (caption, comments)
