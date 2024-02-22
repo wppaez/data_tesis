@@ -1,5 +1,9 @@
+import os
+import csv
 import asyncio
-from typing import Literal
+from re import findall
+from datetime import date, timedelta, datetime
+from typing import Literal, TypedDict
 from playwright.async_api import Page, BrowserContext
 
 NAVIGATION_DELAY = 10000
@@ -110,25 +114,122 @@ async def get_profile_posts(page: Page) -> list[str]:
     return links_to_visit
 
 
+class InstagramComment(TypedDict):
+    link: str
+    date: str
+    caption: str
+    comment: str
+    comment_date: str
+
+
+def includes_month(date_str: str | None) -> bool:
+    if date_str is None:
+        return False
+
+    has_month = any(
+        month_str.lower() in date_str.lower()
+        for month_str in [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ]
+    )
+
+    return has_month
+
+
+def get_month(date_str: str) -> int | None:
+    months = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ]
+    for month_str in months:
+        if month_str.lower() in date_str.lower():
+            return months.index(month_str) + 1
+    return None
+
+
+def parse_date(
+    date_str: str | None = None,
+    offset: str | None = None,
+    fixed_in_year: str | None = None,
+) -> str:
+    format = "%Y-%m-%d"
+    date_to_parse = date_str or date.today().strftime(format)
+
+    if not fixed_in_year is None:
+        year_bits = [int(s) for s in findall(r"\d{4}", fixed_in_year)]
+        year_bit = (
+            str(datetime.now().year) if len(year_bits) == 0 else str(year_bits[0])
+        )
+        date_bits = [int(s) for s in findall(r"\b\d+\b", fixed_in_year)]
+        date_bit = str(date_bits[0])
+        month_bit = str(get_month(fixed_in_year))
+
+        return f"{year_bit}-{month_bit.zfill(2)}-{date_bit.zfill(2)}"
+
+    if offset is None:
+        return date_to_parse
+
+    expected_date = datetime.strptime(date_to_parse, format)
+    if "days ago" in offset:
+        expected_date = expected_date - timedelta(
+            days=int(offset.replace("days ago", "").strip())
+        )
+    elif "day ago" in offset:
+        expected_date = expected_date - timedelta(
+            days=int(offset.replace("day ago", "").strip())
+        )
+    elif "h" in offset:
+        expected_date = expected_date - timedelta(
+            hours=int(offset.replace("h", "").strip())
+        )
+    elif "d" in offset:
+        expected_date = expected_date - timedelta(
+            days=int(offset.replace("d", "").strip())
+        )
+    elif "w" in offset:
+        expected_date = expected_date - timedelta(
+            weeks=int(offset.replace("w", "").strip())
+        )
+
+    return expected_date.strftime(format)
+
+
 async def get_post_comments(
     context: BrowserContext, post_link: str
-) -> tuple[str, list[str]]:
+) -> list[InstagramComment]:
     # Ir al post
     post_tab = await context.new_page()
     await post_tab.goto(post_link)
     await post_tab.wait_for_timeout(NAVIGATION_DELAY)
 
     # Configurar queries
-    wrapper_query = '[role="main"] [role="presentation"] [role="presentation"]'
-    wrapper_items_query = f'{wrapper_query} ul > [role="button"]'
-    caption_query = f"{wrapper_items_query} h1"
-    comments_query = f'{wrapper_items_query} h3 ~ div > span[dir="auto"]'
-
-    # Obtener caption
-    caption = await post_tab.locator(caption_query).first.text_content()
-
-    if caption is None:
-        raise LookupError("Couldn't find caption")
+    drawer_query = '[role="main"] [role="presentation"] [role="presentation"]'
+    date_query = f"{drawer_query} time"
+    comment_query = f'{drawer_query} ul > [role="button"]'
+    caption_query = "h1"
+    content_query = 'h3 ~ div > span[dir="auto"]'
+    comment_date_query = "time"
 
     # Cargar todos los comentarios
     load_more_comments_is_visible = await post_tab.get_by_role(
@@ -162,11 +263,11 @@ async def get_post_comments(
             "button", name="View hidden comments"
         ).is_visible()
 
+    # Cargar respuestas a comentarios
     view_replies_count = await post_tab.get_by_role(
         "button", name="View replies"
     ).count()
 
-    # Cargar respuestas a comentarios
     while view_replies_count > 0:
         view_replies_buttons = await post_tab.get_by_role(
             "button", name="View replies"
@@ -187,14 +288,81 @@ async def get_post_comments(
             "button", name="View replies"
         ).count()
 
+    # Obtener la fecha
+    post_date = await post_tab.locator(date_query).last.text_content()
+    if post_date is None:
+        raise LookupError("Couldn't find post's date")
+
+    post_date_has_month = includes_month(post_date)
+    formatted_post_date = parse_date(
+        fixed_in_year=post_date if post_date_has_month else None,
+        offset=None if post_date_has_month else post_date,
+    )
+
+    comments_wrapper = await post_tab.locator(comment_query).all()
+
+    # Obtener caption
+    caption_wrapper = comments_wrapper.pop(0)
+    post_caption = await caption_wrapper.locator(caption_query).first.text_content()
+    if post_caption is None:
+        raise LookupError("Couldn't find post's caption")
+
     # Extraer comentarios
-    comments_wrapper = await post_tab.locator(comments_query).all()
-    comments = []
+    comments: list[InstagramComment] = []
     for comment_wrapper in comments_wrapper:
-        comment = await comment_wrapper.text_content()
-        if comment is None:
+        comment = await comment_wrapper.locator(content_query).first.text_content()
+        comment_date = await comment_wrapper.locator(
+            comment_date_query
+        ).first.text_content()
+        if comment is None or comment_date is None:
             continue
 
-        comments.append(comment)
+        formatted_comment_date = parse_date(offset=comment_date)
+        ig_comment: InstagramComment = {
+            "link": post_link,
+            "date": formatted_post_date,
+            "caption": post_caption,
+            "comment": comment,
+            "comment_date": formatted_comment_date,
+        }
 
-    return (caption, comments)
+        comments.append(ig_comment)
+
+    await post_tab.close()
+
+    return comments
+
+
+def save_to_csv(account: str, link: str, ig_comments: list[InstagramComment]):
+    folder = "./output"
+    csv_headers = ["link", "date", "caption", "comment", "comment_date"]
+
+    # Definir la ruta del archivo
+    last_slash = link.rfind("/", 0, -1)
+    post_id = link[last_slash:].replace("/", "").strip()
+    filename = f"{post_id}.csv"
+
+    # Definir la ruta del archivo
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+    if not os.path.exists(f"{folder}/{account}"):
+        os.makedirs(f"{folder}/{account}")
+
+    # Borrar archivo si ya existe
+    try:
+        os.remove(f"{folder}/{account}/{filename}")
+    except:
+        pass
+
+    # Escribir archivo
+    output_csv = open(
+        f"{folder}/{account}/{filename}", "w", encoding="utf-8", newline=""
+    )
+
+    writer = csv.DictWriter(output_csv, fieldnames=csv_headers)
+    writer.writeheader()
+    writer.writerows(ig_comments)
+    output_csv.close()
+
+    output_csv.close()
+    return
